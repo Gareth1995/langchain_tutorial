@@ -1,6 +1,84 @@
 import Image from "next/image";
+import { ChatOpenAI } from "@langchain/openai";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
 
-export default function Home() {
+// imports for question/answer functionality
+import { SqlDatabase } from "langchain/sql_db";
+import { DataSource } from "typeorm";
+
+export default async function Home() {
+
+  // // instantiate model
+  // const model = new ChatOpenAI({ model: "gpt-4" });
+  // const messages = [
+  //   new SystemMessage("Translate the following from English into Italian"),
+  //   new HumanMessage("hi!"),
+  // ];
+  
+  // // invoke GPT models
+  // const gptOutput = await model.invoke(messages);
+  // console.log(gptOutput);
+
+  // const textPrompt = await model.invoke("Hello");
+  // console.log('Text Prompt:', textPrompt);
+
+  // const textPrompt2 = await model.invoke([{ role: "user", content: "Hello" }]);
+  // console.log('Text Prompt 2:', textPrompt2);
+
+  // const textPrompt3 = await model.invoke([new HumanMessage("hi!")]);
+  // console.log('Text Prompt 3:', textPrompt3);
+
+  // // streaming response
+  // const stream = await model.stream(messages);
+
+  // const chunks = [];
+  // for await (const chunk of stream) {
+  //   chunks.push(chunk);
+  //   console.log(`${chunk.content}|`);
+  // }
+
+  // // Using messaging templates
+  // const systemTemplate = "Translate the following from English into {language}";
+
+  // const promptTemplate = ChatPromptTemplate.fromMessages([
+  //   ["system", systemTemplate],
+  //   ["user", "{text}"],
+  // ]);
+
+  // const promptValue = await promptTemplate.invoke({
+  //   language: "italian",
+  //   text: "hi!",
+  // });
+  
+  // // see full output
+  // console.log('prompt template output:', promptValue);
+
+  // // see messages
+  // console.log('Prompt messages:', promptValue.toChatMessages());
+
+  // // invoke model with prompt template
+  // const response = await model.invoke(promptValue);
+  // console.log(`prompt template output: ${response.content}`);
+
+  const datasource = new DataSource({
+    type: "postgres",
+    host: "localhost",
+    port: 5432, // Default PostgreSQL port
+    username: "postgres", // Replace with your username
+    password: "password123", // Replace with your password
+    database: "hospitality_app", // Replace with your database name
+  });
+  
+  const db = await SqlDatabase.fromDataSourceParams({
+    appDataSource: datasource,
+  });
+  
+  const postgresQueryOutput = await db.run("SELECT * FROM reviews LIMIT 10;");
+  console.log(postgresQueryOutput);
+
+
+
   return (
     <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
       <main className="flex flex-col gap-8 row-start-2 items-center sm:items-start">
