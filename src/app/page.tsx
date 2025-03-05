@@ -2,15 +2,24 @@ import Image from "next/image";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
+import React from "react";
+import { z } from "zod";
 
 // imports for question/answer functionality
 import { SqlDatabase } from "langchain/sql_db";
 import { DataSource } from "typeorm";
+import { Annotation } from "@langchain/langgraph";
+import { pull } from "langchain/hub";
+import { QuerySqlTool } from "langchain/tools/sql";
+import { StateGraph } from "@langchain/langgraph";
 
 export default async function Home() {
 
-  // // instantiate model
-  // const model = new ChatOpenAI({ model: "gpt-4" });
+  // instantiate model
+  const model = new ChatOpenAI({ model: "gpt-3.5-turbo" });
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  ////////////////////////// INVOKING LLMS USING LANGCHAIN ////////////////////////////////////////////////////
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////
   // const messages = [
   //   new SystemMessage("Translate the following from English into Italian"),
   //   new HumanMessage("hi!"),
@@ -61,6 +70,11 @@ export default async function Home() {
   // const response = await model.invoke(promptValue);
   // console.log(`prompt template output: ${response.content}`);
 
+
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  ////////////////////////// BUILDING LANGRAPH FOR STRUCTURED DATA ////////////////////////////////////////////////////
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // link a data source
   const datasource = new DataSource({
     type: "postgres",
     host: "localhost",
@@ -74,10 +88,114 @@ export default async function Home() {
     appDataSource: datasource,
   });
   
+  // query the database
   const postgresQueryOutput = await db.run("SELECT * FROM reviews LIMIT 10;");
   console.log(postgresQueryOutput);
 
 
+  // define input and state annotations
+  const InputStateAnnotation = Annotation.Root({
+    question: Annotation<string>,
+  });
+  
+  const StateAnnotation = Annotation.Root({
+    question: Annotation<string>,
+    query: Annotation<string>,
+    result: Annotation<string>,
+    answer: Annotation<string>,
+  });
+
+  // use question to sql prompt from langchain hub
+  const queryPromptTemplate = await pull<ChatPromptTemplate>(
+    "langchain-ai/sql-query-system-prompt"
+  );
+  
+  // console.log(queryPromptTemplate.promptMessages[0].lc_kwargs.prompt.template); // view prompt template
+
+  // create template for LLM output structure
+  const queryOutput = z.object({
+    query: z.string().describe("Syntactically valid SQL query."),
+  });
+
+  // set structure for LLm output
+  const structuredLlm = model.withStructuredOutput(queryOutput);
+
+  // create the question to query function (the question to query node)
+  const writeQuery = async (state: typeof InputStateAnnotation.State) => {
+    // invoke the prompt template and fill in pompt values
+    const promptValue = await queryPromptTemplate.invoke({
+      dialect: db.appDataSourceOptions.type,
+      top_k: 10,
+      table_info: await db.getTableInfo(),
+      input: state.question,
+    });
+    const result = await structuredLlm.invoke(promptValue); // invoke structured model with structured prompt value
+    return { query: result.query };
+  };
+
+  // const question2query = await writeQuery({ question: q });
+  // console.log(question2query);
+
+  // execute query node
+  const executeQuery = async (state: typeof StateAnnotation.State) => {
+    const executeQueryTool = new QuerySqlTool(db);
+    return { result: await executeQueryTool.invoke(state.query) };
+  };
+
+  // const executing = await executeQuery({
+  //   question: "",
+  //   query: question2query.query,
+  //   result: "",
+  //   answer: "",
+  // });
+
+  // console.log(executing);
+
+  // generate answer node
+  const generateAnswer = async (state: typeof StateAnnotation.State) => {
+    const promptValue =
+      "Given the following user question, corresponding SQL query, " +
+      "and SQL result, answer the user question.\n\n" +
+      `Question: ${state.question}\n` +
+      `SQL Query: ${state.query}\n` +
+      `SQL Result: ${state.result}\n`;
+    const response = await model.invoke(promptValue);
+    return { answer: response.content };
+  };
+
+  // const llmAnswer = await generateAnswer({
+  //   question: q,
+  //   query: question2query.query,
+  //   result: executing.result,
+  //   answer: "",
+  // });
+  // console.log(llmAnswer);
+
+  // building the LangGraph
+  const graphBuilder = new StateGraph({
+    stateSchema: StateAnnotation,
+  })
+    .addNode("writeQuery", writeQuery)
+    .addNode("executeQuery", executeQuery)
+    .addNode("generateAnswer", generateAnswer)
+    .addEdge("__start__", "writeQuery")
+    .addEdge("writeQuery", "executeQuery")
+    .addEdge("executeQuery", "generateAnswer")
+    .addEdge("generateAnswer", "__end__");
+
+  const graph = graphBuilder.compile();
+
+  // testing out the application
+  let inputs = { question: "What are guests most upset about in Morro Beach?" };
+
+  console.log(inputs);
+  console.log("\n====\n");
+  for await (const step of await graph.stream(inputs, {
+    streamMode: "updates",
+  })) {
+    console.log(step);
+    console.log("\n====\n");
+  }
 
   return (
     <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
